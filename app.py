@@ -4,9 +4,12 @@ Run:  streamlit run app.py
 Data: Yahoo Finance via yfinance (about 1 min delay is fine, nothing here trades).
 Indian stocks: use exchange NSE (.NS) or BSE (.BO), e.g. RELIANCE, TCS, INFY.
 """
+import base64
 import json
 import os
 import re
+import urllib.error
+import urllib.request
 from datetime import date, datetime, time, timedelta, timezone
 
 import numpy as np
@@ -23,6 +26,8 @@ st.set_page_config(page_title="My Stock Tool", page_icon="📈", layout="wide")
 # ---------- storage (saved inside YOUR phone/browser, so it survives restarts) ----------
 LS_KEY = "my_stock_portfolio"
 LS_WATCH = "my_stock_scanlist"
+LS_TRACKER = "my_stock_tracker"
+LS_GHCFG = "my_stock_gh_cfg"
 DEFAULT_POOL = [
     "AHCL.NS", "RHETAN.NS", "SUBEXLTD.NS", "SYNCOMF.NS", "IDEA.NS", "YESBANK.NS", "UCOBANK.NS",
     "SOUTHBANK.NS", "IOB.NS", "CENTRALBK.NS", "JPPOWER.NS", "RPOWER.NS", "RTNPOWER.NS",
@@ -38,7 +43,12 @@ def init_storage():
             js_expressions=f"localStorage.getItem('{LS_KEY}') || '[]'", key="ls_get")
         raw_w = streamlit_js_eval(
             js_expressions=f"localStorage.getItem('{LS_WATCH}') || 'none'", key="ls_get_w")
-        if not isinstance(raw, str) or not isinstance(raw_w, str):
+        raw_t = streamlit_js_eval(
+            js_expressions=f"localStorage.getItem('{LS_TRACKER}') || 'none'", key="ls_get_t")
+        raw_g = streamlit_js_eval(
+            js_expressions=f"localStorage.getItem('{LS_GHCFG}') || 'none'", key="ls_get_g")
+        if not isinstance(raw, str) or not isinstance(raw_w, str) or not isinstance(raw_t, str) \
+                or not isinstance(raw_g, str):
             st.info("Loading your saved shares...")
             st.stop()
         try:
@@ -51,10 +61,33 @@ def init_storage():
             st.session_state.watch = []
         else:
             st.session_state.watch = [x for x in raw_w.split(",") if x]
+        if raw_t in ("none", "empty"):
+            st.session_state.tracker = []
+        else:
+            st.session_state.tracker = [x for x in raw_t.split(",") if x]
+        if raw_g != "none":
+            try:
+                g = json.loads(raw_g)
+                st.session_state.gh_repo = g.get("repo", "")
+                st.session_state.gh_path = g.get("path", "shared_portfolio.json")
+                st.session_state.gh_branch = g.get("branch", "main")
+                st.session_state.gh_auto_pull = bool(g.get("auto_pull", False))
+            except Exception:
+                pass
         st.session_state.save_n = 0
         st.session_state.save_w = 0
+        st.session_state.save_t = 0
+        st.session_state.save_g = 0
     st.session_state.setdefault("watch", DEFAULT_POOL[:])
+    st.session_state.setdefault("tracker", [])
     st.session_state.setdefault("save_w", 0)
+    st.session_state.setdefault("save_t", 0)
+    st.session_state.setdefault("save_g", 0)
+    st.session_state.setdefault("gh_repo", "")
+    st.session_state.setdefault("gh_path", "shared_portfolio.json")
+    st.session_state.setdefault("gh_branch", "main")
+    st.session_state.setdefault("gh_token", "")
+    st.session_state.setdefault("gh_auto_pull", False)
     if st.session_state.save_n > 0:
         payload = json.dumps(json.dumps(st.session_state.portfolio))
         streamlit_js_eval(js_expressions=f"localStorage.setItem('{LS_KEY}', {payload})",
@@ -63,10 +96,98 @@ def init_storage():
         wv = ",".join(st.session_state.watch) or "empty"
         streamlit_js_eval(js_expressions=f"localStorage.setItem('{LS_WATCH}', {json.dumps(wv)})",
                           key=f"ls_setw_{st.session_state.save_w}")
+    if st.session_state.save_t > 0:
+        tv = ",".join(st.session_state.tracker) or "empty"
+        streamlit_js_eval(js_expressions=f"localStorage.setItem('{LS_TRACKER}', {json.dumps(tv)})",
+                          key=f"ls_sett_{st.session_state.save_t}")
+    if st.session_state.save_g > 0:
+        gpayload = json.dumps(json.dumps({
+            "repo": st.session_state.get("gh_repo", ""),
+            "path": st.session_state.get("gh_path", "shared_portfolio.json"),
+            "branch": st.session_state.get("gh_branch", "main"),
+            "auto_pull": bool(st.session_state.get("gh_auto_pull", False)),
+        }))
+        streamlit_js_eval(js_expressions=f"localStorage.setItem('{LS_GHCFG}', {gpayload})",
+                          key=f"ls_setg_{st.session_state.save_g}")
+
+
+# ---------- GitHub sync (lets everyone's phone share one list) ----------
+def gh_cfg():
+    return (st.session_state.get("gh_repo", "").strip(),
+            st.session_state.get("gh_path", "shared_portfolio.json").strip() or "shared_portfolio.json",
+            st.session_state.get("gh_branch", "main").strip() or "main",
+            st.session_state.get("gh_token", "").strip())
+
+
+def gh_fetch():
+    """Returns (data_dict, sha) from the GitHub file, or (None, None) if not reachable/configured."""
+    repo, path, branch, token = gh_cfg()
+    if not repo:
+        return None, None
+    url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "my-stock-tool"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            j = json.loads(r.read().decode("utf-8"))
+        content = base64.b64decode(j["content"]).decode("utf-8")
+        return json.loads(content), j["sha"]
+    except Exception:
+        return None, None
+
+
+def gh_push(data, sha, message="Update from My Stock Tool"):
+    """Writes data to the GitHub file. Needs a token with write access. Returns the new sha, or None on failure."""
+    repo, path, branch, token = gh_cfg()
+    if not repo or not token:
+        return None
+    url = f"https://api.github.com/repos/{repo}/contents/{path}"
+    body = {"message": message, "branch": branch,
+            "content": base64.b64encode(json.dumps(data, indent=2).encode("utf-8")).decode("ascii")}
+    if sha:
+        body["sha"] = sha
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "my-stock-tool",
+               "Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    try:
+        req = urllib.request.Request(url, data=json.dumps(body).encode("utf-8"), method="PUT", headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            j = json.loads(r.read().decode("utf-8"))
+        return j["content"]["sha"]
+    except Exception:
+        return None
+
+
+def shared_data_snapshot():
+    return {"portfolio": st.session_state.portfolio, "tracker": st.session_state.tracker,
+            "watch": st.session_state.watch}
+
+
+def apply_shared_data(d):
+    st.session_state.portfolio = d.get("portfolio", [])
+    st.session_state.tracker = d.get("tracker", [])
+    st.session_state.watch = d.get("watch", DEFAULT_POOL[:])
+
+
+def maybe_github_push():
+    """Called after every local change. If a repo + token are configured, auto-commits the change
+    so other phones (with auto-pull on) pick it up next time they open the app."""
+    repo, _, _, token = gh_cfg()
+    if repo and token:
+        new_sha = gh_push(shared_data_snapshot(), st.session_state.get("gh_sha"))
+        if new_sha:
+            st.session_state.gh_sha = new_sha
 
 
 def persist():
     st.session_state.save_n += 1
+    maybe_github_push()
+
+
+def persist_tracker():
+    st.session_state.save_t += 1
+    maybe_github_push()
 
 
 # ---------- data ----------
@@ -138,6 +259,55 @@ def get_news(symbol):
     except Exception:
         pass
     return out
+
+
+@st.cache_data(ttl=600)
+def get_circuit_limits(symbol):
+    """Best-effort fetch of NSE's upper/lower circuit (price band) limits. Returns None if the share
+    is not on NSE, or if NSE blocks the request (it rate-limits and needs a real browser session,
+    so this will not always work, especially on a server with no history of normal browsing)."""
+    if not symbol.endswith(".NS"):
+        return None
+    base = symbol[:-3]
+    try:
+        import http.cookiejar
+        cj = http.cookiejar.CookieJar()
+        opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        headers = {"User-Agent": "Mozilla/5.0", "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9"}
+        # a normal browser hits the homepage first to pick up cookies before the API will answer
+        opener.open(urllib.request.Request("https://www.nseindia.com/", headers=headers), timeout=10)
+        req = urllib.request.Request(
+            f"https://www.nseindia.com/api/quote-equity?symbol={base}",
+            headers={**headers, "Referer": f"https://www.nseindia.com/get-quotes/equity?symbol={base}"})
+        with opener.open(req, timeout=10) as r:
+            j = json.loads(r.read().decode("utf-8"))
+        pi = j.get("priceInfo", {})
+        upper = pi.get("upperCP")
+        lower = pi.get("lowerCP")
+        if upper is None and lower is None:
+            return None
+        return {"upper": float(upper) if upper not in (None, "", "NA") else None,
+                "lower": float(lower) if lower not in (None, "", "NA") else None}
+    except Exception:
+        return None
+
+
+def rebound_outlook(symbol, hist, target_pct=3.0, horizon_days=5):
+    """Green/yellow/red + a percentage estimate of a worthwhile move in the next week, reusing the
+    same score/history logic as the rest of the app (news, volume, trend, RSI, recent high/low)."""
+    res = analyse(symbol, date.today())
+    if not res:
+        return None
+    ts = touch_stats(hist, target_pct, horizon_days)
+    factor = max(0.5, min(1.5, 1 + 0.1 * res["score"]))
+    chance = max(0.0, min(0.95, ts["est"] * factor)) if ts else max(0.0, min(0.6, 0.5 + 0.1 * res["score"]))
+    if res["verdict"] == "SELL" or chance < 0.25:
+        light = "red"
+    elif res["verdict"] == "BUY" and chance >= 0.45:
+        light = "green"
+    else:
+        light = "yellow"
+    return {"light": light, "chance": chance, "reasons": res["reasons"], "verdict": res["verdict"]}
 
 
 # ---------- analysis ----------
@@ -696,6 +866,12 @@ def today_position(df):
 # ---------- UI ----------
 st.title("📈 My Stock Tool")
 init_storage()
+if st.session_state.gh_auto_pull and st.session_state.gh_repo and "gh_pulled_once" not in st.session_state:
+    _d, _sha = gh_fetch()
+    if _d:
+        apply_shared_data(_d)
+        st.session_state.gh_sha = _sha
+    st.session_state.gh_pulled_once = True
 portfolio = st.session_state.portfolio
 
 with st.sidebar:
@@ -732,10 +908,48 @@ with st.sidebar:
         st.rerun()
     st.time_input("Don't buy before (IST)", value=time(12, 0), key="wait_time")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["Portfolio", "Predict buy / sell", "Loss Recovery Planner",
-                                         "Rebound Radar", "Buy Timer"])
+    with st.expander("☁️ Share across phones (GitHub)"):
+        st.caption("Use the SAME repo, file name and branch on every phone. Only type the access token on "
+                   "YOUR OWN phone — leave it blank on a phone (like Dad's) that should just view the list.")
+        st.text_input("GitHub repo (yourname/your-repo)", key="gh_repo")
+        st.text_input("File name in repo", key="gh_path")
+        st.text_input("Branch", key="gh_branch")
+        st.text_input("Personal access token (only on your own phone)", type="password", key="gh_token")
+        st.checkbox("Always pull the latest list when this opens (use on Dad's phone)", key="gh_auto_pull")
+        gc1, gc2, gc3 = st.columns(3)
+        if gc1.button("⬇️ Pull"):
+            _d, _sha = gh_fetch()
+            if _d:
+                apply_shared_data(_d)
+                st.session_state.gh_sha = _sha
+                st.success("Pulled the latest shared list.")
+                st.rerun()
+            else:
+                st.error("Could not fetch. Check the repo name, file name and branch.")
+        if gc2.button("⬆️ Push"):
+            new_sha = gh_push(shared_data_snapshot(), st.session_state.get("gh_sha"))
+            if new_sha:
+                st.session_state.gh_sha = new_sha
+                st.success("Pushed. Other phones with auto-pull will see this next time they open.")
+            else:
+                st.error("Push failed. A token with write access to this repo is needed for this button.")
+        if gc3.button("💾 Remember"):
+            st.session_state.save_g += 1
+            st.success("Saved these settings on this phone.")
+            st.rerun()
+        st.caption("Once a share or token is typed on your own phone, every Add/Remove/Save in this app "
+                   "auto-pushes to GitHub, so Dad's phone (with auto-pull on) picks it up next time he opens it.")
 
-with tab1:
+PAGES = ["Portfolio", "Predict buy / sell", "Loss Recovery Planner", "Rebound Radar", "Share Tracker", "Buy Timer"]
+st.session_state.setdefault("page", PAGES[0])
+page = st.radio("Section", PAGES, horizontal=True, key="page", label_visibility="collapsed")
+st.divider()
+# NOTE: this uses a radio (bound to session_state via key="page") instead of st.tabs on purpose.
+# st.tabs always snaps back to the first tab after a button click triggers a script rerun; a
+# key-bound widget does not, so pressing "Find top 5 rebound shares" etc. now keeps you on the
+# same section instead of bouncing you back to Portfolio.
+
+if page == "Portfolio":
     if not portfolio:
         st.info("No shares yet. Add one from the sidebar.")
     else:
@@ -773,7 +987,7 @@ with tab1:
                 persist()
                 st.rerun()
 
-with tab2:
+if page == "Predict buy / sell":
     if not portfolio:
         st.info("Add a share first.")
     else:
@@ -803,7 +1017,7 @@ with tab2:
                 st.warning("This is a rule-based helper, not financial advice. Markets can move against any signal.")
 
 
-with tab3:
+if page == "Loss Recovery Planner":
     st.subheader("Loss Recovery Planner")
     st.caption("Compare HOLDING a losing share against SWITCHING that money into other shares. "
                "Chances are estimates from this stock's own last-year history plus today's news, "
@@ -954,7 +1168,7 @@ with tab3:
                        "volume and news. Selling a loser to chase a quick win is how losses grow, so keep to the stop-loss.")
 
 
-with tab4:
+if page == "Rebound Radar":
     st.subheader("Rebound Radar")
     st.caption("Finds volatile shares priced between 12 and 35 that hit a recent low, are bouncing back, show a "
                "volume jump and have positive news, and compares them with the sleepy shares tying up your money.")
@@ -1033,10 +1247,12 @@ with tab4:
             top = out["top"]
             st.session_state.radar_top = [r["symbol"] for r in top]
             if not top:
+                st.session_state.radar_table = []
                 st.info("No share matches right now. That is a valid answer: forcing a trade when nothing "
                         "fits is how losses happen. Try again later or widen your scan list.")
             else:
                 table = []
+                why = {}
                 for rank, r in enumerate(top, 1):
                     m = r["m"]
                     live = get_price(r["symbol"]) or m["price"]
@@ -1052,36 +1268,130 @@ with tab4:
                     r["chance"] = chance
                     table.append({"#": rank, "Share": r["symbol"], "Live": round(live, 2),
                                   "Daily move %": round(m["atr_pct"], 1), "Setup score": round(r["final"], 1),
-                                  f"Chance of +{tgt:g}% in {hz4_label}": f"{chance*100:.0f}%" if chance is not None else "n/a",
+                                  "Chance col": f"Chance of +{tgt:g}% in {hz4_label}",
+                                  "Chance": f"{chance*100:.0f}%" if chance is not None else "n/a",
                                   "Qty": qty, "Amount": round(qty * live), "Stop-loss": round(stop, 2),
                                   "Target": round(tpx, 2), "Profit at target": round(qty * (tpx - live)),
                                   "Loss at stop": round(qty * (live - stop)),
                                   "Reward/Risk": round((tpx / live - 1) / ((live - stop) / live), 2) if live > stop else None,
                                   "Typical daily move": round(qty * live * m["atr_pct"] / 100)})
-                st.markdown("### Top picks")
-                st.dataframe(pd.DataFrame(table), hide_index=True, use_container_width=True)
-                st.caption("Qty assumes you put the whole amount into that one share. You can split it across "
-                           "several. Reward/Risk below 1 means you risk more than you can gain: very volatile shares "
-                           "need a wide stop-loss, so raise your profit target or invest less in them.")
-                if len(top) < 5:
-                    st.info(f"Only {len(top)} share(s) met every condition (price 12 to 35, daily move of at least "
-                            f"{min_move:g}%, near a recent low, bouncing, no bad news). Lower the minimum daily move "
-                            "or add more shares to the scan list for more picks.")
-                timing_banner()
-                for r in top:
-                    with st.expander(f"Why {r['symbol']} (setup score {r['final']:.1f})"):
-                        for x in r["why"]:
-                            st.write("• " + x)
-                        st.write("**News in plain words**")
-                        st.write(r["news_text"])
-                st.warning("Spotting a rebound after it has happened is easy; catching one before it happens is "
-                           "not. Volatile shares fall as fast as they rise, so always place the stop-loss, and "
-                           "remember that selling a holding books its P/L plus charges.")
+                    why[r["symbol"]] = {"why": r["why"], "news_text": r["news_text"], "score": r["final"]}
+                st.session_state.radar_table = table
+                st.session_state.radar_why = why
+                st.session_state.radar_short = len(top) < 5
+                st.session_state.radar_min_move = min_move
 
-with tab5:
+    # Rendered from session_state (not inline above) so it survives the rerun a Save button causes.
+    if st.session_state.get("radar_table"):
+        table = st.session_state.radar_table
+        why = st.session_state.get("radar_why", {})
+        chance_col = table[0]["Chance col"] if table else "Chance"
+        disp = pd.DataFrame([{k: v for k, v in row.items() if k != "Chance col"} for row in table])
+        disp = disp.rename(columns={"Chance": chance_col})
+        st.markdown("### Top picks")
+        st.dataframe(disp, hide_index=True, use_container_width=True)
+        st.caption("Qty assumes you put the whole amount into that one share. You can split it across "
+                   "several. Reward/Risk below 1 means you risk more than you can gain: very volatile shares "
+                   "need a wide stop-loss, so raise your profit target or invest less in them.")
+        st.caption("Save any of these to Share Tracker to follow them with price, volume, circuit-limit and "
+                   "a buy/wait/avoid reading, separate from your actual holdings.")
+        for row in table:
+            sym = row["Share"]
+            c1, c2, c3 = st.columns([2, 2, 1])
+            c1.write(f"**{sym}**  ·  {row['Live']}")
+            c2.caption(why.get(sym, {}).get("why", [""])[0] if why.get(sym, {}).get("why") else "")
+            if sym in st.session_state.tracker:
+                c3.button("✅ Saved", key=f"saved_{sym}", disabled=True)
+            else:
+                if c3.button("💾 Save", key=f"save_radar_{sym}"):
+                    st.session_state.tracker.append(sym)
+                    persist_tracker()
+                    st.rerun()
+        if st.session_state.get("radar_short"):
+            st.info(f"Only {len([t for t in table])} share(s) met every condition (price 12 to 35, daily move "
+                    f"of at least {st.session_state.get('radar_min_move', 0):g}%, near a recent low, bouncing, "
+                    "no bad news). Lower the minimum daily move or add more shares to the scan list for more picks.")
+        timing_banner()
+        for sym, info in why.items():
+            with st.expander(f"Why {sym} (setup score {info['score']:.1f})"):
+                for x in info["why"]:
+                    st.write("• " + x)
+                st.write("**News in plain words**")
+                st.write(info["news_text"])
+        st.warning("Spotting a rebound after it has happened is easy; catching one before it happens is "
+                   "not. Volatile shares fall as fast as they rise, so always place the stop-loss, and "
+                   "remember that selling a holding books its P/L plus charges.")
+
+if page == "Share Tracker":
+    st.subheader("Share Tracker")
+    st.caption("Shares you saved from Rebound Radar. Pick one to see its price, volume, recent graphs, circuit "
+               "limits and a buy / wait / avoid reading for the next week — separate from your actual holdings.")
+    if not st.session_state.tracker:
+        st.info("Nothing saved yet. Go to Rebound Radar, run \"Find top 5 rebound shares\", and press "
+                "💾 Save next to any share you want to follow here.")
+    else:
+        rm_col, _ = st.columns([3, 1])
+        with rm_col.expander("Remove a tracked share"):
+            rm_sym = st.selectbox("Share", st.session_state.tracker, key="tracker_rm_pick")
+            if st.button("Remove", key="tracker_rm_btn"):
+                st.session_state.tracker = [s for s in st.session_state.tracker if s != rm_sym]
+                persist_tracker()
+                st.rerun()
+
+        sel_t = st.selectbox("Select a share to look at", st.session_state.tracker, key="tracker_sel")
+        if sel_t:
+            with st.spinner(f"Checking {sel_t}..."):
+                hist_t = get_history(sel_t)
+                live_t = get_price(sel_t)
+                circ = get_circuit_limits(sel_t)
+                verdict_t = rebound_outlook(sel_t, hist_t)
+
+            if hist_t.empty or live_t is None:
+                st.error("Could not fetch data for this share right now.")
+            else:
+                last_row = hist_t.iloc[-1]
+                prev_close = float(hist_t["Close"].iloc[-2]) if len(hist_t) > 1 else float(last_row["Close"])
+                day_chg_t = (live_t / prev_close - 1) * 100 if prev_close else 0.0
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Current price", f"{live_t:.2f}", f"{day_chg_t:+.2f}%")
+                m2.metric("Today's high / low", f"{last_row['High']:.2f} / {last_row['Low']:.2f}")
+                m3.metric("Latest volume", f"{int(last_row['Volume']):,}")
+                avg_vol_t = float(hist_t["Volume"].iloc[-21:-1].mean()) if len(hist_t) > 21 else float(hist_t["Volume"].mean())
+                m4.metric("Volume vs 20-day avg", f"{(last_row['Volume']/avg_vol_t - 1)*100:+.0f}%" if avg_vol_t else "n/a")
+
+                if circ:
+                    cc1, cc2 = st.columns(2)
+                    cc1.metric("Upper circuit", f"{circ['upper']:.2f}" if circ.get("upper") else "n/a")
+                    cc2.metric("Lower circuit", f"{circ['lower']:.2f}" if circ.get("lower") else "n/a")
+                else:
+                    st.caption("Upper/lower circuit limits are not available right now (NSE did not respond, "
+                               "or this is not an NSE share). Everything else above still works.")
+
+                st.markdown("#### Price history")
+                g1, g2, g3, g4 = st.tabs(["1 week", "1 month", "6 months", "1 year"])
+                for gtab, ndays in [(g1, 5), (g2, 21), (g3, 126), (g4, 252)]:
+                    with gtab:
+                        st.line_chart(hist_t["Close"].tail(ndays))
+
+                st.markdown("#### Buy it now for next week's profit?")
+                if verdict_t:
+                    light = {"green": "🟢 Looks favourable", "yellow": "🟡 Mixed — wait for confirmation",
+                             "red": "🔴 Looks unfavourable"}[verdict_t["light"]]
+                    st.markdown(f"### {light}")
+                    st.progress(verdict_t["chance"], text=f"Estimated chance of a worthwhile move: {verdict_t['chance']*100:.0f}%")
+                    for x in verdict_t["reasons"]:
+                        st.write("• " + x)
+                else:
+                    st.info("Not enough history to score this share yet.")
+                st.warning("This reading is a rule-based estimate (price range, volume, trend, RSI and news), "
+                           "not a guarantee. Always use a stop-loss.")
+
+if page == "Buy Timer":
     st.subheader("Buy Timer")
     st.caption("Press the button before you buy anything on your broker app. This tool never places orders.")
-    opts = list(dict.fromkeys([h["symbol"] for h in portfolio] + st.session_state.get("radar_top", [])))
+    opts = list(dict.fromkeys([h["symbol"] for h in portfolio] + st.session_state.get("tracker", [])
+                               + st.session_state.get("radar_top", [])))
     b1, b2 = st.columns(2)
     sel5 = b1.selectbox("Share", opts) if opts else None
     typed5 = b2.text_input("...or type a symbol (NSE assumed)").strip().upper()
