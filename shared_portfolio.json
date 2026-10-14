@@ -6,11 +6,6 @@
       "buy_price": 16.87
     },
     {
-      "symbol": "SYNCOMF.NS",
-      "qty": 4900,
-      "buy_price": 26.56
-    },
-    {
       "symbol": "AHCL.NS",
       "qty": 1500,
       "buy_price": 29.8
@@ -50,5 +45,6 @@
     "SPCENET.NS",
     "UJJIVANSFB.NS",
     "EASEMYTRIP.NS"
-  ]
+  ],
+  "monthly_pl": {}
 }
