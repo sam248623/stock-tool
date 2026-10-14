@@ -1,9 +1,11 @@
 {
   "name": "My Stock Tool",
   "short_name": "Stock Tool",
+  "description": "Personal stock portfolio, Rebound Radar and Share Tracker app.",
   "start_url": "https://stock-tool-gpcfrfr5mhrcpqw44c722j.streamlit.app/",
   "scope": "https://stock-tool-gpcfrfr5mhrcpqw44c722j.streamlit.app/",
   "display": "standalone",
+  "orientation": "portrait",
   "background_color": "#0E1117",
   "theme_color": "#FF4B4B",
   "icons": [
