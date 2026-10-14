@@ -53,6 +53,13 @@ streamlit_js_eval(js_expressions="""
 })();
 """, key="pwa_manifest_fix")
 
+# Stops the "pull down at the top = page reloads" gesture on mobile (Chrome's native
+# pull-to-refresh), so swiping up/down inside the app just scrolls instead of refreshing.
+st.markdown(
+    "<style>html, body, [data-testid='stAppViewContainer'] { overscroll-behavior-y: contain; }</style>",
+    unsafe_allow_html=True,
+)
+
 
 # ---------- storage (saved inside YOUR phone/browser, so it survives restarts) ----------
 LS_KEY = "my_stock_portfolio"
