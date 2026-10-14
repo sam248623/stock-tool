@@ -68,6 +68,30 @@ LS_KEY = "my_stock_portfolio"
 LS_WATCH = "my_stock_scanlist"
 LS_TRACKER = "my_stock_tracker"
 LS_GHCFG = "my_stock_gh_cfg"
+LS_MONTHLY = "my_stock_monthly_pl"
+TRADING_START = date(2026, 8, 19)  # month 1 begins here; each later month starts the same day next month
+
+
+def add_months(d, months):
+    m = d.month - 1 + months
+    y = d.year + m // 12
+    m = m % 12 + 1
+    last_day = [31, 29 if (y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)) else 28,
+                31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1]
+    return date(y, m, min(d.day, last_day))
+
+
+def month_bounds(n):
+    """1-based month number -> (start_date, end_date) of that 1-month trading block."""
+    return add_months(TRADING_START, n - 1), add_months(TRADING_START, n)
+
+
+def current_month_number(today=None):
+    today = today or date.today()
+    n = 1
+    while month_bounds(n)[1] <= today:
+        n += 1
+    return n
 DEFAULT_POOL = [
     "AHCL.NS", "RHETAN.NS", "SUBEXLTD.NS", "SYNCOMF.NS", "IDEA.NS", "YESBANK.NS", "UCOBANK.NS",
     "SOUTHBANK.NS", "IOB.NS", "CENTRALBK.NS", "JPPOWER.NS", "RPOWER.NS", "RTNPOWER.NS",
@@ -87,8 +111,10 @@ def init_storage():
             js_expressions=f"localStorage.getItem('{LS_TRACKER}') || 'none'", key="ls_get_t")
         raw_g = streamlit_js_eval(
             js_expressions=f"localStorage.getItem('{LS_GHCFG}') || 'none'", key="ls_get_g")
+        raw_m = streamlit_js_eval(
+            js_expressions=f"localStorage.getItem('{LS_MONTHLY}') || '{{}}'", key="ls_get_m")
         if not isinstance(raw, str) or not isinstance(raw_w, str) or not isinstance(raw_t, str) \
-                or not isinstance(raw_g, str):
+                or not isinstance(raw_g, str) or not isinstance(raw_m, str):
             st.info("Loading your saved shares...")
             st.stop()
         try:
@@ -114,15 +140,22 @@ def init_storage():
                 st.session_state.gh_auto_pull = bool(g.get("auto_pull", False))
             except Exception:
                 pass
+        try:
+            st.session_state.monthly_pl = {int(k): v for k, v in json.loads(raw_m).items()}
+        except Exception:
+            st.session_state.monthly_pl = {}
         st.session_state.save_n = 0
         st.session_state.save_w = 0
         st.session_state.save_t = 0
         st.session_state.save_g = 0
+        st.session_state.save_m = 0
     st.session_state.setdefault("watch", DEFAULT_POOL[:])
     st.session_state.setdefault("tracker", [])
+    st.session_state.setdefault("monthly_pl", {})
     st.session_state.setdefault("save_w", 0)
     st.session_state.setdefault("save_t", 0)
     st.session_state.setdefault("save_g", 0)
+    st.session_state.setdefault("save_m", 0)
     st.session_state.setdefault("gh_repo", GH_REPO_DEFAULT)
     st.session_state.setdefault("gh_path", GH_PATH_DEFAULT)
     st.session_state.setdefault("gh_branch", GH_BRANCH_DEFAULT)
@@ -149,6 +182,10 @@ def init_storage():
         }))
         streamlit_js_eval(js_expressions=f"localStorage.setItem('{LS_GHCFG}', {gpayload})",
                           key=f"ls_setg_{st.session_state.save_g}")
+    if st.session_state.save_m > 0:
+        mpayload = json.dumps(json.dumps({str(k): v for k, v in st.session_state.monthly_pl.items()}))
+        streamlit_js_eval(js_expressions=f"localStorage.setItem('{LS_MONTHLY}', {mpayload})",
+                          key=f"ls_setm_{st.session_state.save_m}")
 
 
 # ---------- GitHub sync (lets everyone's phone share one list) ----------
@@ -217,13 +254,18 @@ def gh_push(data, sha, message="Update from My Stock Tool"):
 
 def shared_data_snapshot():
     return {"portfolio": st.session_state.portfolio, "tracker": st.session_state.tracker,
-            "watch": st.session_state.watch}
+            "watch": st.session_state.watch,
+            "monthly_pl": {str(k): v for k, v in st.session_state.monthly_pl.items()}}
 
 
 def apply_shared_data(d):
     st.session_state.portfolio = d.get("portfolio", [])
     st.session_state.tracker = d.get("tracker", [])
     st.session_state.watch = d.get("watch", DEFAULT_POOL[:])
+    try:
+        st.session_state.monthly_pl = {int(k): v for k, v in d.get("monthly_pl", {}).items()}
+    except Exception:
+        st.session_state.monthly_pl = {}
 
 
 def maybe_github_push():
@@ -243,6 +285,11 @@ def persist():
 
 def persist_tracker():
     st.session_state.save_t += 1
+    maybe_github_push()
+
+
+def persist_monthly():
+    st.session_state.save_m += 1
     maybe_github_push()
 
 
@@ -935,14 +982,16 @@ def today_position(df):
 # ---------- UI ----------
 st.title("📈 My Stock Tool")
 init_storage()
-if st.session_state.gh_repo and not st.session_state.gh_token:
-    # No token on this device = it's a viewer (e.g. Dad's phone): always show the latest from GitHub,
-    # automatically, no setup needed. A device with a token is treated as the editor and is not
-    # auto-overwritten, so it can push local changes without them being pulled straight back over.
+if st.session_state.gh_repo and not st.session_state.gh_token and "gh_pulled_once" not in st.session_state:
+    # No token on this device = it's a viewer (e.g. Dad's phone): show the latest from GitHub
+    # automatically, once per visit. (Only once, not on every rerun — otherwise an edit you just
+    # made locally on a token-less device gets silently reverted by the very next auto-pull,
+    # before your change has had a chance to be seen. Reopening the app still always gets fresh data.)
     _d, _sha = gh_fetch_cached(st.session_state.gh_repo, st.session_state.gh_path, st.session_state.gh_branch)
     if _d:
         apply_shared_data(_d)
         st.session_state.gh_sha = _sha
+    st.session_state.gh_pulled_once = True
 portfolio = st.session_state.portfolio
 
 with st.sidebar:
@@ -1035,11 +1084,11 @@ def render_portfolio():
             invested = h["qty"] * h["buy_price"]
             value = h["qty"] * p if p else None
             pl = value - invested if value is not None else None
-            rows.append({"#": i, "Symbol": h["symbol"], "Qty": h["qty"], "Buy price": h["buy_price"],
-                         "Live price": round(p, 2) if p else None, "Invested": round(invested, 2),
-                         "Value": round(value, 2) if value else None,
+            rows.append({"#": i, "Symbol": h["symbol"],
                          "P/L": round(pl, 2) if pl is not None else None,
-                         "P/L %": round(pl / invested * 100, 2) if pl is not None else None})
+                         "Qty": h["qty"], "Buy price": h["buy_price"],
+                         "Live price": round(p, 2) if p else None, "Invested": round(invested, 2),
+                         "Value": round(value, 2) if value else None})
         df = pd.DataFrame(rows)
         priced = df[df["Value"].notna()]
         missing = df[df["Value"].isna()]
@@ -1070,7 +1119,7 @@ def render_portfolio():
                 return ""
             return "color: green" if v > 0 else "color: red" if v < 0 else ""
 
-        st.dataframe(two_dec(df.drop(columns="#")).map(colour, subset=["P/L", "P/L %"]),
+        st.dataframe(two_dec(df.drop(columns="#")).map(colour, subset=["P/L"]),
                      use_container_width=True, hide_index=True)
 
         with st.expander("Remove a share"):
@@ -1078,10 +1127,33 @@ def render_portfolio():
             if st.button("Delete selected"):
                 portfolio.pop(int(rm.split(" - ")[0]))
                 persist()
-                st.rerun()
+                st.rerun(scope="fragment")
 
 
 if page == "Portfolio":
+    cur_month = current_month_number()
+    month_opts = list(range(1, cur_month + 1))
+    labels = {n: f"Month {n} ({month_bounds(n)[0].strftime('%d %b')} - {month_bounds(n)[1].strftime('%d %b %Y')})"
+              for n in month_opts}
+    sel_month = st.selectbox("Month", month_opts, index=len(month_opts) - 1,
+                              format_func=lambda n: labels[n], key="month_pick")
+    stored = st.session_state.monthly_pl.get(sel_month)
+    new_val = st.number_input("P/L for this month (enter manually)",
+                               value=float(stored) if stored is not None else 0.0, step=100.0, key="month_pl_input")
+    if st.button("💾 Save this month's P/L"):
+        st.session_state.monthly_pl[sel_month] = new_val
+        persist_monthly()
+        st.rerun()
+    shown = st.session_state.monthly_pl.get(sel_month)
+    if shown is not None:
+        colr = "#16c784" if shown > 0 else "#ea3943" if shown < 0 else "inherit"
+        st.markdown(f'<div style="font-size:2rem;font-weight:600;color:{colr};">{shown:+,.2f}</div>',
+                    unsafe_allow_html=True)
+    if sel_month == cur_month:
+        days_left = (month_bounds(cur_month)[1] - date.today()).days
+        weeks_left = max(0, -(-days_left // 7))  # round up
+        st.caption(f"{weeks_left} week(s) left in this month (ends {month_bounds(cur_month)[1].strftime('%d %b %Y')})")
+    st.divider()
     render_portfolio()
 
 if page == "Predict buy / sell":
