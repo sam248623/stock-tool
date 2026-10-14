@@ -1048,7 +1048,18 @@ def render_portfolio():
         c1, c2, c3 = st.columns(3)
         c1.metric("Invested", f"{tot_inv:,.2f}")
         c2.metric("Current value", f"{tot_val:,.2f}")
-        c3.metric("Total P/L", f"{tot_val - tot_inv:,.2f}", f"{(tot_val / tot_inv - 1) * 100:.2f}%" if tot_inv else None)
+        pl_amt = tot_val - tot_inv
+        pl_pct = (tot_val / tot_inv - 1) * 100 if tot_inv else 0
+        pl_color = "#16c784" if pl_amt > 0 else "#ea3943" if pl_amt < 0 else "inherit"
+        arrow = "↑" if pl_amt > 0 else "↓" if pl_amt < 0 else ""
+        with c3:
+            st.markdown(f"""
+            <div style="line-height:1.2">
+              <div style="font-size:0.875rem;color:#808495;">Total P/L</div>
+              <div style="font-size:2.25rem;font-weight:600;color:{pl_color};">{pl_amt:,.2f}</div>
+              <div style="font-size:0.875rem;color:{pl_color};">{arrow} {pl_pct:.2f}%</div>
+            </div>
+            """, unsafe_allow_html=True)
         if not missing.empty:
             st.warning(f"No live price right now for: {', '.join(missing['Symbol'])}. Their invested amount "
                        "is left out of the totals above (not counted as a loss) until a price comes through — "
