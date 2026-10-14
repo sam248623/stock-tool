@@ -28,6 +28,15 @@ GH_BRANCH_DEFAULT = "main"
 
 st.set_page_config(page_title="My Stock Tool", page_icon="📈", layout="wide")
 
+# Makes this installable as an app (PWA): the manifest + icons are served as static files
+# (see .streamlit/config.toml -> enableStaticServing, and the /static folder next to app.py).
+st.markdown(
+    '<link rel="manifest" href="/app/static/manifest.json">'
+    '<meta name="theme-color" content="#FF4B4B">'
+    '<link rel="apple-touch-icon" href="/app/static/icon-192.png">',
+    unsafe_allow_html=True,
+)
+
 
 # ---------- storage (saved inside YOUR phone/browser, so it survives restarts) ----------
 LS_KEY = "my_stock_portfolio"
