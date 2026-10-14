@@ -28,14 +28,30 @@ GH_BRANCH_DEFAULT = "main"
 
 st.set_page_config(page_title="My Stock Tool", page_icon="📈", layout="wide")
 
-# Makes this installable as an app (PWA). The manifest + icons are hosted on GitHub Pages
-# (docs/ folder of this repo) because Streamlit's own static file serving does not allow .json files.
-st.markdown(
-    '<link rel="manifest" href="https://sam248623.github.io/stock-tool/manifest.json">'
-    '<meta name="theme-color" content="#FF4B4B">'
-    '<link rel="apple-touch-icon" href="https://sam248623.github.io/stock-tool/icon-192.png">',
-    unsafe_allow_html=True,
-)
+# Makes this installable as an app (PWA). Streamlit itself ships its own manifest.json (pointing
+# at a broken icon path), which wins over anything we merely append, so we directly REWRITE that
+# existing <link rel="manifest"> tag's href via JS (streamlit_js_eval runs in the real page, not a
+# sandboxed iframe) to point at our own manifest + icons hosted on GitHub Pages (docs/ folder).
+streamlit_js_eval(js_expressions="""
+(function(){
+  var href = 'https://sam248623.github.io/stock-tool/manifest.json';
+  var link = document.querySelector('link[rel="manifest"]');
+  if (link) { link.href = href; } else {
+    link = document.createElement('link'); link.rel = 'manifest'; link.href = href;
+    document.head.appendChild(link);
+  }
+  var tc = document.querySelector('meta[name="theme-color"]');
+  if (tc) { tc.content = '#FF4B4B'; } else {
+    tc = document.createElement('meta'); tc.name = 'theme-color'; tc.content = '#FF4B4B';
+    document.head.appendChild(tc);
+  }
+  if (!document.querySelector('link[rel="apple-touch-icon"]')) {
+    var at = document.createElement('link'); at.rel = 'apple-touch-icon';
+    at.href = 'https://sam248623.github.io/stock-tool/icon-192.png';
+    document.head.appendChild(at);
+  }
+})();
+""", key="pwa_manifest_fix")
 
 
 # ---------- storage (saved inside YOUR phone/browser, so it survives restarts) ----------
