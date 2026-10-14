@@ -1,0 +1,54 @@
+{
+  "portfolio": [
+    {
+      "symbol": "RHETAN.NS",
+      "qty": 20100,
+      "buy_price": 16.87
+    },
+    {
+      "symbol": "SYNCOMF.NS",
+      "qty": 4900,
+      "buy_price": 26.56
+    },
+    {
+      "symbol": "AHCL.NS",
+      "qty": 1500,
+      "buy_price": 29.8
+    }
+  ],
+  "tracker": [],
+  "watch": [
+    "AHCL.NS",
+    "RHETAN.NS",
+    "SUBEXLTD.NS",
+    "SYNCOMF.NS",
+    "IDEA.NS",
+    "YESBANK.NS",
+    "UCOBANK.NS",
+    "SOUTHBANK.NS",
+    "IOB.NS",
+    "CENTRALBK.NS",
+    "JPPOWER.NS",
+    "RPOWER.NS",
+    "RTNPOWER.NS",
+    "RTNINDIA.NS",
+    "GTLINFRA.NS",
+    "SUZLON.NS",
+    "HCC.NS",
+    "NBCC.NS",
+    "IRFC.NS",
+    "NHPC.NS",
+    "SJVN.NS",
+    "TRIDENT.NS",
+    "VIKASLIFE.NS",
+    "PCJEWELLER.NS",
+    "JPASSOCIAT.NS",
+    "MMTC.NS",
+    "ITI.NS",
+    "HFCL.NS",
+    "SAKSOFT.NS",
+    "SPCENET.NS",
+    "UJJIVANSFB.NS",
+    "EASEMYTRIP.NS"
+  ]
+}
