@@ -59,9 +59,9 @@ st.markdown("""
 <style>
 html, body, [data-testid='stAppViewContainer'] { overscroll-behavior-y: contain; }
 [data-testid='stAppViewContainer'] { overflow-y: scroll !important; }
-::-webkit-scrollbar { width: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #2563eb; border-radius: 6px; }
+[data-testid='stAppViewContainer']::-webkit-scrollbar { width: 8px; }
+[data-testid='stAppViewContainer']::-webkit-scrollbar-track { background: transparent; }
+[data-testid='stAppViewContainer']::-webkit-scrollbar-thumb { background: #2563eb; border-radius: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
