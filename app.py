@@ -221,7 +221,13 @@ def get_price(symbol):
         if p is None or pd.isna(p):
             h = t.history(period="5d")
             p = float(h["Close"].iloc[-1]) if not h.empty else None
-        return float(p) if p is not None else None
+        if p is None or pd.isna(p):
+            h = t.history(period="1mo")  # thinly-traded small-caps can have gaps in the last 5 days
+            p = float(h["Close"].iloc[-1]) if not h.empty else None
+        if p is None or pd.isna(p):
+            info = t.info or {}
+            p = info.get("currentPrice") or info.get("regularMarketPrice") or info.get("previousClose")
+        return float(p) if p is not None and not pd.isna(p) else None
     except Exception:
         return None
 
@@ -990,12 +996,18 @@ if page == "Portfolio":
                          "P/L": round(pl, 2) if pl is not None else None,
                          "P/L %": round(pl / invested * 100, 2) if pl is not None else None})
         df = pd.DataFrame(rows)
-        tot_inv = df["Invested"].sum()
-        tot_val = df["Value"].sum()
+        priced = df[df["Value"].notna()]
+        missing = df[df["Value"].isna()]
+        tot_inv = priced["Invested"].sum()
+        tot_val = priced["Value"].sum()
         c1, c2, c3 = st.columns(3)
         c1.metric("Invested", f"{tot_inv:,.2f}")
         c2.metric("Current value", f"{tot_val:,.2f}")
         c3.metric("Total P/L", f"{tot_val - tot_inv:,.2f}", f"{(tot_val / tot_inv - 1) * 100:.2f}%" if tot_inv else None)
+        if not missing.empty:
+            st.warning(f"No live price right now for: {', '.join(missing['Symbol'])}. Their invested amount "
+                       "is left out of the totals above (not counted as a loss) until a price comes through — "
+                       "try 🔄 Refresh prices in the sidebar.")
 
         def colour(v):
             if pd.isna(v):
