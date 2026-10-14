@@ -28,12 +28,12 @@ GH_BRANCH_DEFAULT = "main"
 
 st.set_page_config(page_title="My Stock Tool", page_icon="📈", layout="wide")
 
-# Makes this installable as an app (PWA): the manifest + icons are served as static files
-# (see .streamlit/config.toml -> enableStaticServing, and the /static folder next to app.py).
+# Makes this installable as an app (PWA). The manifest + icons are hosted on GitHub Pages
+# (docs/ folder of this repo) because Streamlit's own static file serving does not allow .json files.
 st.markdown(
-    '<link rel="manifest" href="/app/static/manifest.json">'
+    '<link rel="manifest" href="https://sam248623.github.io/stock-tool/manifest.json">'
     '<meta name="theme-color" content="#FF4B4B">'
-    '<link rel="apple-touch-icon" href="/app/static/icon-192.png">',
+    '<link rel="apple-touch-icon" href="https://sam248623.github.io/stock-tool/icon-192.png">',
     unsafe_allow_html=True,
 )
 
