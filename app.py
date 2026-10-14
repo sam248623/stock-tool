@@ -363,6 +363,13 @@ def rebound_outlook(symbol, hist, target_pct=3.0, horizon_days=5):
     return {"light": light, "chance": chance, "reasons": res["reasons"], "verdict": res["verdict"]}
 
 
+def two_dec(df):
+    """Format every float column to exactly 2 decimals for display (Streamlit's default grid
+    otherwise shows up to 6, e.g. 16.870000)."""
+    float_cols = df.select_dtypes(include="float").columns.tolist()
+    return df.style.format({c: "{:.2f}" for c in float_cols}) if float_cols else df.style
+
+
 # ---------- analysis ----------
 POSITIVE = ["contract", "order win", "wins order", "bags order", "order", "profit rises", "profit jumps",
             "record", "growth", "upgrade", "buy rating", "outperform", "beats", "surge", "rally",
@@ -1043,7 +1050,7 @@ def render_portfolio():
                 return ""
             return "color: green" if v > 0 else "color: red" if v < 0 else ""
 
-        st.dataframe(df.drop(columns="#").style.map(colour, subset=["P/L", "P/L %"]),
+        st.dataframe(two_dec(df.drop(columns="#")).map(colour, subset=["P/L", "P/L %"]),
                      use_container_width=True, hide_index=True)
 
         with st.expander("Remove a share"):
@@ -1080,7 +1087,7 @@ if page == "Predict buy / sell":
                 for r in res["reasons"]:
                     st.write("• " + r)
                 st.subheader("Peak high / low")
-                st.dataframe(res["range_table"], hide_index=True, use_container_width=True)
+                st.dataframe(two_dec(res["range_table"]), hide_index=True, use_container_width=True)
                 st.line_chart(res["hist"]["Close"])
                 st.subheader("What the news says")
                 st.write(res["news_text"])
@@ -1195,7 +1202,7 @@ if page == "Loss Recovery Planner":
                                   "Profit if target hit": round(profit),
                                   "Of your loss": f"{profit / loss_amt * 100:.0f}%" if loss_amt else "",
                                   "Note": liq})
-                st.dataframe(pd.DataFrame(table), hide_index=True, use_container_width=True)
+                st.dataframe(two_dec(pd.DataFrame(table)), hide_index=True, use_container_width=True)
                 if any(t["Buy qty"] for t in table):
                     timing_banner()
                 spend = sum(t["Amount"] for t in table)
@@ -1260,7 +1267,7 @@ if page == "Rebound Radar":
     move_sym = None
     if rows4:
         st.markdown("#### Where your money sits (sleepiest first)")
-        st.dataframe(pd.DataFrame(rows4).drop(columns=["_p", "_q"]), hide_index=True, use_container_width=True)
+        st.dataframe(two_dec(pd.DataFrame(rows4).drop(columns=["_p", "_q"])), hide_index=True, use_container_width=True)
         move_sym = st.selectbox("Money I would move out of", [r["Share"] for r in rows4])
         mrow = next(r for r in rows4 if r["Share"] == move_sym)
         amount = st.number_input("Amount to invest in the new share", min_value=0.0, value=float(mrow["Value"]),
@@ -1359,7 +1366,7 @@ if page == "Rebound Radar":
         disp = pd.DataFrame([{k: v for k, v in row.items() if k != "Chance col"} for row in table])
         disp = disp.rename(columns={"Chance": chance_col})
         st.markdown("### Top picks")
-        st.dataframe(disp, hide_index=True, use_container_width=True)
+        st.dataframe(two_dec(disp), hide_index=True, use_container_width=True)
         st.caption("Qty assumes you put the whole amount into that one share. You can split it across "
                    "several. Reward/Risk below 1 means you risk more than you can gain: very volatile shares "
                    "need a wide stop-loss, so raise your profit target or invest less in them.")
