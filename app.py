@@ -980,7 +980,11 @@ st.divider()
 # key-bound widget does not, so pressing "Find top 5 rebound shares" etc. now keeps you on the
 # same section instead of bouncing you back to Portfolio.
 
-if page == "Portfolio":
+@st.fragment(run_every=10)
+def render_portfolio():
+    """This block re-runs on its own every 10s — only these numbers redraw, nothing else on the
+    page reloads or scrolls back to top. 10s is a practical floor: get_price is cached for 60s and
+    NSE's free feed itself is delayed, so checking any faster would just repaint the same figures."""
     if not portfolio:
         st.info("No shares yet. Add one from the sidebar.")
     else:
@@ -1023,6 +1027,10 @@ if page == "Portfolio":
                 portfolio.pop(int(rm.split(" - ")[0]))
                 persist()
                 st.rerun()
+
+
+if page == "Portfolio":
+    render_portfolio()
 
 if page == "Predict buy / sell":
     if not portfolio:
@@ -1376,12 +1384,16 @@ if page == "Share Tracker":
                 st.rerun()
 
         sel_t = st.selectbox("Select a share to look at", st.session_state.tracker, key="tracker_sel")
-        if sel_t:
-            with st.spinner(f"Checking {sel_t}..."):
-                hist_t = get_history(sel_t)
-                live_t = get_price(sel_t)
-                circ = get_circuit_limits(sel_t)
-                verdict_t = rebound_outlook(sel_t, hist_t)
+
+        @st.fragment(run_every=10)
+        def render_tracker_detail(sym):
+            """Re-runs on its own every 10s so the price/volume numbers stay current without
+            reloading the graphs or losing your place."""
+            with st.spinner(f"Checking {sym}..."):
+                hist_t = get_history(sym)
+                live_t = get_price(sym)
+                circ = get_circuit_limits(sym)
+                verdict_t = rebound_outlook(sym, hist_t)
 
             if hist_t.empty or live_t is None:
                 st.error("Could not fetch data for this share right now.")
@@ -1423,6 +1435,9 @@ if page == "Share Tracker":
                     st.info("Not enough history to score this share yet.")
                 st.warning("This reading is a rule-based estimate (price range, volume, trend, RSI and news), "
                            "not a guarantee. Always use a stop-loss.")
+
+        if sel_t:
+            render_tracker_detail(sel_t)
 
 if page == "Buy Timer":
     st.subheader("Buy Timer")
