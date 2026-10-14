@@ -55,10 +55,15 @@ streamlit_js_eval(js_expressions="""
 
 # Stops the "pull down at the top = page reloads" gesture on mobile (Chrome's native
 # pull-to-refresh), so swiping up/down inside the app just scrolls instead of refreshing.
-st.markdown(
-    "<style>html, body, [data-testid='stAppViewContainer'] { overscroll-behavior-y: contain; }</style>",
-    unsafe_allow_html=True,
-)
+st.markdown("""
+<style>
+html, body, [data-testid='stAppViewContainer'] { overscroll-behavior-y: contain; }
+[data-testid='stAppViewContainer'] { overflow-y: scroll !important; }
+::-webkit-scrollbar { width: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2563eb; border-radius: 6px; }
+</style>
+""", unsafe_allow_html=True)
 
 
 # ---------- storage (saved inside YOUR phone/browser, so it survives restarts) ----------
