@@ -20,6 +20,12 @@ from streamlit_js_eval import streamlit_js_eval
 
 DATA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "portfolio.json")
 
+# Fixed defaults so nobody has to type the repo in on their phone. Only the token (on your own
+# phone, to push) and the auto-pull checkbox (on Dad's phone, to always view the latest) need setting.
+GH_REPO_DEFAULT = "sam248623/stock-tool"
+GH_PATH_DEFAULT = "shared_portfolio.json"
+GH_BRANCH_DEFAULT = "main"
+
 st.set_page_config(page_title="My Stock Tool", page_icon="📈", layout="wide")
 
 
@@ -83,9 +89,9 @@ def init_storage():
     st.session_state.setdefault("save_w", 0)
     st.session_state.setdefault("save_t", 0)
     st.session_state.setdefault("save_g", 0)
-    st.session_state.setdefault("gh_repo", "")
-    st.session_state.setdefault("gh_path", "shared_portfolio.json")
-    st.session_state.setdefault("gh_branch", "main")
+    st.session_state.setdefault("gh_repo", GH_REPO_DEFAULT)
+    st.session_state.setdefault("gh_path", GH_PATH_DEFAULT)
+    st.session_state.setdefault("gh_branch", GH_BRANCH_DEFAULT)
     st.session_state.setdefault("gh_token", "")
     st.session_state.setdefault("gh_auto_pull", False)
     if st.session_state.save_n > 0:
@@ -120,7 +126,8 @@ def gh_cfg():
 
 
 def gh_fetch():
-    """Returns (data_dict, sha) from the GitHub file, or (None, None) if not reachable/configured."""
+    """Returns (data_dict, sha) from the GitHub file, or (None, None) if not reachable/configured.
+    Always goes to GitHub (no cache) - used by the manual Pull button so it is instant."""
     repo, path, branch, token = gh_cfg()
     if not repo:
         return None, None
@@ -128,6 +135,21 @@ def gh_fetch():
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "my-stock-tool"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            j = json.loads(r.read().decode("utf-8"))
+        content = base64.b64decode(j["content"]).decode("utf-8")
+        return json.loads(content), j["sha"]
+    except Exception:
+        return None, None
+
+
+@st.cache_data(ttl=20)
+def gh_fetch_cached(repo, path, branch):
+    """Same as gh_fetch but cached for 20s, so auto-pull on every click/rerun doesn't spam GitHub's API."""
+    url = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "my-stock-tool"}
     try:
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=15) as r:
@@ -866,12 +888,14 @@ def today_position(df):
 # ---------- UI ----------
 st.title("📈 My Stock Tool")
 init_storage()
-if st.session_state.gh_auto_pull and st.session_state.gh_repo and "gh_pulled_once" not in st.session_state:
-    _d, _sha = gh_fetch()
+if st.session_state.gh_repo and not st.session_state.gh_token:
+    # No token on this device = it's a viewer (e.g. Dad's phone): always show the latest from GitHub,
+    # automatically, no setup needed. A device with a token is treated as the editor and is not
+    # auto-overwritten, so it can push local changes without them being pulled straight back over.
+    _d, _sha = gh_fetch_cached(st.session_state.gh_repo, st.session_state.gh_path, st.session_state.gh_branch)
     if _d:
         apply_shared_data(_d)
         st.session_state.gh_sha = _sha
-    st.session_state.gh_pulled_once = True
 portfolio = st.session_state.portfolio
 
 with st.sidebar:
@@ -909,13 +933,14 @@ with st.sidebar:
     st.time_input("Don't buy before (IST)", value=time(12, 0), key="wait_time")
 
     with st.expander("☁️ Share across phones (GitHub)"):
-        st.caption("Use the SAME repo, file name and branch on every phone. Only type the access token on "
-                   "YOUR OWN phone — leave it blank on a phone (like Dad's) that should just view the list.")
+        st.caption("The repo is already set. On Dad's phone, nothing else is needed — leave the token "
+                   "blank and it always shows the latest list, automatically, every time he opens the link. "
+                   "On YOUR OWN phone, type the access token below once — after that every Add/Remove/Save "
+                   "pushes to GitHub by itself.")
         st.text_input("GitHub repo (yourname/your-repo)", key="gh_repo")
         st.text_input("File name in repo", key="gh_path")
         st.text_input("Branch", key="gh_branch")
         st.text_input("Personal access token (only on your own phone)", type="password", key="gh_token")
-        st.checkbox("Always pull the latest list when this opens (use on Dad's phone)", key="gh_auto_pull")
         gc1, gc2, gc3 = st.columns(3)
         if gc1.button("⬇️ Pull"):
             _d, _sha = gh_fetch()
@@ -930,7 +955,7 @@ with st.sidebar:
             new_sha = gh_push(shared_data_snapshot(), st.session_state.get("gh_sha"))
             if new_sha:
                 st.session_state.gh_sha = new_sha
-                st.success("Pushed. Other phones with auto-pull will see this next time they open.")
+                st.success("Pushed. Other phones will see this as soon as they open the link.")
             else:
                 st.error("Push failed. A token with write access to this repo is needed for this button.")
         if gc3.button("💾 Remember"):
