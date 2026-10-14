@@ -1,1 +1,15 @@
-
+{
+  "name": "My Stock Tool",
+  "short_name": "Stock Tool",
+  "start_url": "https://stock-tool-gpcfrfr5mhrcpqw44c722j.streamlit.app/",
+  "scope": "https://stock-tool-gpcfrfr5mhrcpqw44c722j.streamlit.app/",
+  "display": "standalone",
+  "background_color": "#0E1117",
+  "theme_color": "#FF4B4B",
+  "icons": [
+    {"src": "https://sam248623.github.io/stock-tool/icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "https://sam248623.github.io/stock-tool/icon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "https://sam248623.github.io/stock-tool/icon-192-maskable.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
+    {"src": "https://sam248623.github.io/stock-tool/icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
