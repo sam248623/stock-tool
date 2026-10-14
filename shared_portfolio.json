@@ -46,5 +46,8 @@
     "UJJIVANSFB.NS",
     "EASEMYTRIP.NS"
   ],
-  "monthly_pl": {}
+  "monthly_pl": {
+    "1": 11000.0,
+    "2": 12490.0
+  }
 }
