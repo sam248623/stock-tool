@@ -152,6 +152,7 @@ def init_storage():
     st.session_state.setdefault("watch", DEFAULT_POOL[:])
     st.session_state.setdefault("tracker", [])
     st.session_state.setdefault("monthly_pl", {})
+    st.session_state.setdefault("superpredictor", {})
     st.session_state.setdefault("save_w", 0)
     st.session_state.setdefault("save_t", 0)
     st.session_state.setdefault("save_g", 0)
@@ -255,7 +256,8 @@ def gh_push(data, sha, message="Update from My Stock Tool"):
 def shared_data_snapshot():
     return {"portfolio": st.session_state.portfolio, "tracker": st.session_state.tracker,
             "watch": st.session_state.watch,
-            "monthly_pl": {str(k): v for k, v in st.session_state.monthly_pl.items()}}
+            "monthly_pl": {str(k): v for k, v in st.session_state.monthly_pl.items()},
+            "superpredictor": st.session_state.get("superpredictor", {})}
 
 
 def apply_shared_data(d):
@@ -266,16 +268,26 @@ def apply_shared_data(d):
         st.session_state.monthly_pl = {int(k): v for k, v in d.get("monthly_pl", {}).items()}
     except Exception:
         st.session_state.monthly_pl = {}
+    st.session_state.superpredictor = d.get("superpredictor", {})
 
 
 def maybe_github_push():
     """Called after every local change. If a repo + token are configured, auto-commits the change
     so other phones (with auto-pull on) pick it up next time they open the app."""
-    repo, _, _, token = gh_cfg()
+    repo, path, branch, token = gh_cfg()
     if repo and token:
-        new_sha = gh_push(shared_data_snapshot(), st.session_state.get("gh_sha"))
+        sha = st.session_state.get("gh_sha")
+        if not sha:
+            # Nothing fetched yet this session (e.g. token was typed before any auto-pull/manual
+            # pull happened) — GitHub's API requires the file's current sha to overwrite it, so
+            # without this the push silently fails 422 and the edit is never actually saved remotely.
+            _, sha = gh_fetch()
+        new_sha = gh_push(shared_data_snapshot(), sha)
         if new_sha:
             st.session_state.gh_sha = new_sha
+        else:
+            st.toast("⚠️ Could not save to GitHub — check your token/repo settings, or tap ⬆️ Push manually.",
+                     icon="⚠️")
 
 
 def persist():
@@ -862,6 +874,68 @@ def tech_score(m, min_move=2.2):
     return s, why
 
 
+SP_PRICE_MIN, SP_PRICE_MAX = 12.0, 18.0
+SP_SWING_MIN, SP_SWING_MAX = 4.0, 9.0
+SP_MIN_TURNOVER = 500000  # avg ₹ traded/day — liquidity/"safe company" proxy, see caveat in the page
+
+
+def superpredictor_check(symbol, hist):
+    """Applies every SuperPredictor rule to one share. Returns a result dict if it qualifies,
+    else None. hist must be >=150 rows of daily OHLCV (yfinance 1y history)."""
+    if len(hist) < 150:
+        return None
+    m = rebound_metrics(hist)
+    if not m:
+        return None
+    price = m["price"]
+    if not (SP_PRICE_MIN <= price <= SP_PRICE_MAX):
+        return None
+    if not (SP_SWING_MIN <= m["atr_pct"] <= SP_SWING_MAX):
+        return None
+    turnover = m["base_vol"] * price
+    if turnover < SP_MIN_TURNOVER:
+        return None  # too illiquid/obscure to call "safe" with any confidence
+    low5 = float(hist["Low"].tail(5).min())
+    low21 = float(hist["Low"].tail(21).min())
+    near_week_low = price <= low5 * 1.03
+    near_month_low = price <= low21 * 1.03
+    if not (near_week_low or near_month_low):
+        return None
+    ts = touch_stats(hist, 1.5, 1)  # historical odds of a next-day rise of >=1.5%
+    if not ts:
+        return None
+    nt, items = score_news(get_news(symbol))
+    news_score = max(-2, min(2, nt))
+    if news_score < 0:
+        return None  # bad news in the last week — skip regardless of the technical setup
+    tscore = tech_score(m, min_move=SP_SWING_MIN)
+    if tscore is None:
+        return None
+    factor = max(0.6, min(1.5, 1 + 0.12 * (tscore[0] + news_score)))
+    chance = max(0.0, min(0.95, ts["est"] * factor))
+    if chance < 0.45:
+        return None
+    why = tscore[1] + [f"At its {'1-week' if near_week_low else '1-month'} low." ,
+                        f"History-based odds of a next-day rise of 1.5%+: about {chance*100:.0f}%."]
+    return {"symbol": symbol, "price": round(price, 2), "swing_pct": round(m["atr_pct"], 1),
+            "chance": round(chance, 3), "turnover": round(turnover), "why": why,
+            "news_text": explain_news(items)}
+
+
+def superpredictor_scan(tickers):
+    hits = []
+    for t in tickers:
+        try:
+            sub = get_history(t)
+            r = superpredictor_check(t, sub)
+            if r:
+                hits.append(r)
+        except Exception:
+            continue
+    hits.sort(key=lambda r: r["chance"], reverse=True)
+    return hits[:10]
+
+
 def run_scan(tickers, min_move=2.2):
     data = download_many(tuple(tickers))
     rows = []
@@ -1061,7 +1135,8 @@ with st.sidebar:
         st.caption("Once a share or token is typed on your own phone, every Add/Remove/Save in this app "
                    "auto-pushes to GitHub, so Dad's phone (with auto-pull on) picks it up next time he opens it.")
 
-PAGES = ["Portfolio", "Predict buy / sell", "Loss Recovery Planner", "Rebound Radar", "Share Tracker", "Buy Timer"]
+PAGES = ["Portfolio", "Predict buy / sell", "Loss Recovery Planner", "Rebound Radar", "Share Tracker",
+         "Buy Timer", "SuperPredictor"]
 st.session_state.setdefault("page", PAGES[0])
 page = st.radio("Section", PAGES, horizontal=True, key="page", label_visibility="collapsed")
 st.divider()
@@ -1562,6 +1637,50 @@ if page == "Share Tracker":
 
         if sel_t:
             render_tracker_detail(sel_t)
+
+if page == "SuperPredictor":
+    st.subheader("SuperPredictor")
+    st.caption("Your rules: price ₹12-18, at a 1-week or 1-month low, swings 4-9% a day, decent "
+               "liquidity, no bad news this week, and a history-based >45% chance of a 1.5%+ rise "
+               "tomorrow. A scheduled job can scan the whole NSE list and update this automatically "
+               "at market open, 12:15 and 14:30 IST (see the SuperPredictor setup note) — or scan your "
+               "watch list right now below.")
+    st.warning("\"Safe\" / \"good reputation\" here is only a liquidity proxy (steady average turnover, "
+               "a full year of trading history) — this is NOT a check on the company's finances, "
+               "promoters or governance. Verify that yourself before buying.")
+
+    sp = st.session_state.get("superpredictor", {})
+    picks = sp.get("picks", [])
+    updated = sp.get("updated_at")
+    if picks:
+        st.caption(f"Last auto-scan: {updated or 'unknown time'}")
+        for r in picks:
+            with st.container(border=True):
+                c1, c2, c3 = st.columns([2, 1, 1])
+                c1.markdown(f"**{r['symbol']}**")
+                c2.metric("Price", r["price"])
+                c3.metric("Next-day odds", f"{r['chance']*100:.0f}%")
+                for x in r["why"]:
+                    st.write("• " + x)
+                if r.get("news_text"):
+                    st.caption(r["news_text"])
+    else:
+        st.info("No auto-scan results yet.")
+
+    st.divider()
+    if st.button("🔍 Scan my watch list now"):
+        with st.spinner("Checking your watch list against the SuperPredictor rules..."):
+            hits = superpredictor_scan(st.session_state.watch)
+        if hits:
+            st.session_state.superpredictor = {
+                "updated_at": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"), "picks": hits}
+            persist()
+            st.rerun()
+        else:
+            st.info("Nothing in your current watch list matches every rule right now.")
+    st.caption(f"Checks {len(st.session_state.watch)} shares from your scan list (Rebound Radar's sidebar). "
+               "For the full NSE list, use the scheduled scan instead — checking thousands of shares "
+               "here would be slow and may hit rate limits.")
 
 if page == "Buy Timer":
     st.subheader("Buy Timer")
