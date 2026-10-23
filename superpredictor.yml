@@ -1,0 +1,25 @@
+name: SuperPredictor Scan
+
+on:
+  schedule:
+    - cron: '45 3 * * 1-5'   # 09:15 IST
+    - cron: '45 6 * * 1-5'   # 12:15 IST
+    - cron: '0 9 * * 1-5'    # 14:30 IST
+  workflow_dispatch: {}       # lets you also trigger it manually from the Actions tab
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install yfinance pandas numpy
+      - run: python superpredictor_scan.py
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          GH_PATH: shared_portfolio.json
+          GH_BRANCH: main
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
