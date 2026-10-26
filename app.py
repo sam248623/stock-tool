@@ -1450,39 +1450,21 @@ if page == "Rebound Radar":
     hz4 = {"1 week": 5, "1 month": 21}[hz4_label]
     min_move = r3.number_input("Min typical daily move %", min_value=1.0, value=5.0, step=0.5)
 
-    with st.expander(f"Scan list ({len(st.session_state.watch)} shares). Only these are scanned."):
-        txt = st.text_area("One or more symbols, comma separated (NSE assumed if no .NS or .BO)",
-                           ", ".join(st.session_state.watch), height=120)
-        if st.button("Save scan list"):
-            new = []
-            for t in txt.replace("\n", ",").split(","):
-                t = t.strip().upper()
-                if t:
-                    t = t if "." in t else t + ".NS"
-                    if t not in new:
-                        new.append(t)
-            st.session_state.watch = new
-            st.session_state.save_w += 1
-            st.rerun()
-        st.caption("The starting list is a guess of low-priced shares. I could not check today's prices, so "
-                   "remove or add shares as you like. Prices outside 12 to 35 are skipped automatically.")
-
-    scan_all = st.checkbox("Scan the whole NSE market too (slower, about 1 to 3 minutes)")
+    st.caption("Scans the whole NSE market every time — no fixed shortlist to maintain.")
     if st.button("Find top 5 rebound shares", type="primary"):
-        pool = list(dict.fromkeys(st.session_state.watch + [h["symbol"] for h in portfolio]))[:120]
-        if scan_all:
-            uni = get_nse_universe()
-            if not uni:
-                st.warning("Could not download the NSE share list (it may be blocked on your network). "
-                           "Scanning only your scan list instead.")
-            else:
-                prog = st.progress(0.0, text="Checking prices...")
-                found = prefilter_universe(uni, min_move, prog)
-                prog.empty()
-                st.caption(f"Whole market: {len(uni)} NSE shares checked, {len(found)} priced near 12 to 35 with enough movement.")
-                pool = list(dict.fromkeys(pool + found))[:400]
+        pool = [h["symbol"] for h in portfolio]
+        uni = get_nse_universe()
+        if not uni:
+            st.warning("Could not download the NSE share list (it may be blocked on your network). "
+                       "Scanning only your current holdings instead.")
+        else:
+            prog = st.progress(0.0, text="Checking prices...")
+            found = prefilter_universe(uni, min_move, prog)
+            prog.empty()
+            st.caption(f"Whole market: {len(uni)} NSE shares checked, {len(found)} priced near 12 to 35 with enough movement.")
+            pool = list(dict.fromkeys(pool + found))[:400]
         if not pool:
-            st.warning("Your scan list is empty.")
+            st.warning("Could not build a list of shares to scan.")
         else:
             with st.spinner(f"Scanning {len(pool)} shares (history, volume, news)..."):
                 out = run_scan(pool, min_move)
@@ -1668,19 +1650,27 @@ if page == "SuperPredictor":
         st.info("No auto-scan results yet.")
 
     st.divider()
-    if st.button("🔍 Scan my watch list now"):
-        with st.spinner("Checking your watch list against the SuperPredictor rules..."):
-            hits = superpredictor_scan(st.session_state.watch)
-        if hits:
-            st.session_state.superpredictor = {
-                "updated_at": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"), "picks": hits}
-            persist()
-            st.rerun()
+    if st.button("🔍 Scan the whole NSE market now", type="primary"):
+        uni = get_nse_universe()
+        if not uni:
+            st.warning("Could not download the NSE share list (it may be blocked on your network).")
         else:
-            st.info("Nothing in your current watch list matches every rule right now.")
-    st.caption(f"Checks {len(st.session_state.watch)} shares from your scan list (Rebound Radar's sidebar). "
-               "For the full NSE list, use the scheduled scan instead — checking thousands of shares "
-               "here would be slow and may hit rate limits.")
+            prog = st.progress(0.0, text="Checking prices...")
+            found = prefilter_universe(uni, SP_SWING_MIN, prog)
+            prog.empty()
+            st.caption(f"{len(uni)} NSE shares checked, {len(found)} priced near 12-18 with enough movement "
+                       "— running full SuperPredictor rules on those now.")
+            with st.spinner(f"Checking {len(found)} candidates against every SuperPredictor rule..."):
+                hits = superpredictor_scan(found)
+            if hits:
+                st.session_state.superpredictor = {
+                    "updated_at": datetime.now(IST).strftime("%d %b %Y, %H:%M IST"), "picks": hits}
+                persist()
+                st.rerun()
+            else:
+                st.info("Nothing in the whole NSE market matches every rule right now.")
+    st.caption("Takes about 1-3 minutes since it checks the full NSE list. The scheduled job (see setup "
+               "note) does this automatically 3x a day without you needing to open the app.")
 
 if page == "Buy Timer":
     st.subheader("Buy Timer")
