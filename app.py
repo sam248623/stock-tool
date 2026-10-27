@@ -1232,33 +1232,74 @@ if page == "Portfolio":
     render_portfolio()
 
 if page == "Predict buy / sell":
-    if not portfolio:
-        st.info("Add a share first.")
-    else:
-        labels = [f"{h['symbol']} (bought @ {h['buy_price']})" for h in portfolio]
-        choice = st.selectbox("Select share", labels)
-        h = portfolio[labels.index(choice)]
-        when = st.date_input("Date to decide for", value=date.today(), max_value=date.today())
-        if st.button("🔮 Predict buy / sell", type="primary"):
-            with st.spinner("Analysing..."):
-                res = analyse(h["symbol"], when, h["buy_price"])
-            if not res:
-                st.error("Not enough data for this symbol/date. Check the symbol and exchange.")
+    pt1, pt2 = st.tabs(["My holdings", "Any stock"])
+
+    with pt1:
+        if not portfolio:
+            st.info("Add a share first.")
+        else:
+            labels = [f"{h['symbol']} (bought @ {h['buy_price']})" for h in portfolio]
+            choice = st.selectbox("Select share", labels, key="predict_holding_pick")
+            h = portfolio[labels.index(choice)]
+            when = st.date_input("Date to decide for", value=date.today(), max_value=date.today(),
+                                 key="predict_holding_date")
+            if st.button("🔮 Predict buy / sell", type="primary", key="predict_holding_btn"):
+                with st.spinner("Analysing..."):
+                    res = analyse(h["symbol"], when, h["buy_price"])
+                if not res:
+                    st.error("Not enough data for this symbol/date. Check the symbol and exchange.")
+                else:
+                    colour_map = {"BUY": "green", "SELL": "red"}
+                    st.markdown(f"## Verdict: :{colour_map.get(res['verdict'], 'orange')}[{res['verdict']}]")
+                    st.caption(f"Price on {when}: {res['price']:.2f}  |  Score: {res['score']:+.1f} (range -5 to +5)")
+                    if res["verdict"] == "BUY":
+                        timing_banner()
+                    st.subheader("Why")
+                    for r in res["reasons"]:
+                        st.write("• " + r)
+                    st.subheader("Peak high / low")
+                    st.dataframe(two_dec(res["range_table"]), hide_index=True, use_container_width=True)
+                    st.line_chart(res["hist"]["Close"])
+                    st.subheader("What the news says")
+                    st.write(res["news_text"])
+                    st.warning("This is a rule-based helper, not financial advice. Markets can move against any signal.")
+
+    with pt2:
+        st.caption("Check any share, even one you don't own or have saved anywhere — NSE is assumed if you "
+                   "don't type .NS or .BO.")
+        c1, c2 = st.columns([2, 1])
+        sym_raw = c1.text_input("Symbol (e.g. TATASTEEL, RELIANCE, SUZLON)", key="predict_any_sym")
+        exch = c2.selectbox("Exchange", ["NSE (.NS)", "BSE (.BO)", "US / other (no suffix)"], key="predict_any_exch")
+        my_bp = st.number_input("My buy price (optional — leave 0 if you don't own it)",
+                                min_value=0.0, value=0.0, step=1.0, key="predict_any_bp")
+        when2 = st.date_input("Date to decide for", value=date.today(), max_value=date.today(),
+                              key="predict_any_date")
+        if st.button("🔮 Predict buy / sell", type="primary", key="predict_any_btn"):
+            sym = sym_raw.strip().upper()
+            if not sym:
+                st.warning("Type a symbol first.")
             else:
-                colour_map = {"BUY": "green", "SELL": "red"}
-                st.markdown(f"## Verdict: :{colour_map.get(res['verdict'], 'orange')}[{res['verdict']}]")
-                st.caption(f"Price on {when}: {res['price']:.2f}  |  Score: {res['score']:+.1f} (range -5 to +5)")
-                if res["verdict"] == "BUY":
-                    timing_banner()
-                st.subheader("Why")
-                for r in res["reasons"]:
-                    st.write("• " + r)
-                st.subheader("Peak high / low")
-                st.dataframe(two_dec(res["range_table"]), hide_index=True, use_container_width=True)
-                st.line_chart(res["hist"]["Close"])
-                st.subheader("What the news says")
-                st.write(res["news_text"])
-                st.warning("This is a rule-based helper, not financial advice. Markets can move against any signal.")
+                if "." not in sym:
+                    sym += ".NS" if exch.startswith("NSE") else ".BO" if exch.startswith("BSE") else ""
+                with st.spinner(f"Analysing {sym}..."):
+                    res = analyse(sym, when2, my_bp if my_bp > 0 else None)
+                if not res:
+                    st.error("Not enough data for this symbol/date. Check the symbol and exchange.")
+                else:
+                    colour_map = {"BUY": "green", "SELL": "red"}
+                    st.markdown(f"## Verdict: :{colour_map.get(res['verdict'], 'orange')}[{res['verdict']}]")
+                    st.caption(f"Price on {when2}: {res['price']:.2f}  |  Score: {res['score']:+.1f} (range -5 to +5)")
+                    if res["verdict"] == "BUY":
+                        timing_banner()
+                    st.subheader("Why")
+                    for r in res["reasons"]:
+                        st.write("• " + r)
+                    st.subheader("Peak high / low")
+                    st.dataframe(two_dec(res["range_table"]), hide_index=True, use_container_width=True)
+                    st.line_chart(res["hist"]["Close"])
+                    st.subheader("What the news says")
+                    st.write(res["news_text"])
+                    st.warning("This is a rule-based helper, not financial advice. Markets can move against any signal.")
 
 
 if page == "Loss Recovery Planner":
