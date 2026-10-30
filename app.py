@@ -757,7 +757,10 @@ def download_many(tickers, period="1y"):
 
 @st.cache_data(ttl=86400)
 def get_nse_universe():
-    """All NSE equity symbols (official list). Returns [] if the download is blocked."""
+    """All NSE equity symbols. NSE blocks requests from cloud/datacenter IPs (which is what
+    Streamlit Cloud runs on), so the live download below will often fail there — that's expected,
+    not a bug. Falls back to a local nse_universe.csv shipped in the repo (see SuperPredictor page
+    for how to create/refresh it from your own PC, where NSE isn't blocked)."""
     import io
     import urllib.request
     try:
@@ -767,6 +770,17 @@ def get_nse_universe():
                      "Referer": "https://www.nseindia.com/"})
         with urllib.request.urlopen(req, timeout=25) as r:
             df = pd.read_csv(io.BytesIO(r.read()))
+        df.columns = [c.strip() for c in df.columns]
+        if "SERIES" in df.columns:
+            df = df[df["SERIES"].astype(str).str.strip() == "EQ"]
+        out = sorted({str(x).strip().upper() + ".NS" for x in df["SYMBOL"]})
+        if out:
+            return out
+    except Exception:
+        pass
+    try:
+        local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nse_universe.csv")
+        df = pd.read_csv(local_path)
         df.columns = [c.strip() for c in df.columns]
         if "SERIES" in df.columns:
             df = df[df["SERIES"].astype(str).str.strip() == "EQ"]
