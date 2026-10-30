@@ -56,6 +56,8 @@ NEGATIVE = ["loss", "falls", "plunge", "downgrade", "sell rating", "underperform
 
 
 def get_nse_universe():
+    """Live NSE download usually fails from GitHub Actions too (NSE blocks datacenter IPs) —
+    falls back to nse_universe.csv committed in the repo root."""
     try:
         req = urllib.request.Request(
             "https://nsearchives.nseindia.com/content/equities/EQUITY_L.csv",
@@ -63,6 +65,16 @@ def get_nse_universe():
                      "Referer": "https://www.nseindia.com/"})
         with urllib.request.urlopen(req, timeout=25) as r:
             df = pd.read_csv(io.BytesIO(r.read()))
+        df.columns = [c.strip() for c in df.columns]
+        if "SERIES" in df.columns:
+            df = df[df["SERIES"].astype(str).str.strip() == "EQ"]
+        out = sorted({str(x).strip().upper() + ".NS" for x in df["SYMBOL"]})
+        if out:
+            return out
+    except Exception:
+        pass
+    try:
+        df = pd.read_csv(os.path.join(os.path.dirname(os.path.abspath(__file__)), "nse_universe.csv"))
         df.columns = [c.strip() for c in df.columns]
         if "SERIES" in df.columns:
             df = df[df["SERIES"].astype(str).str.strip() == "EQ"]
